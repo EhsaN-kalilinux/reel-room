@@ -11,12 +11,12 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// roomId -> { members: Map(socketId -> {name}), lastState: {action, time, speed, ts} }
+// roomId -> { members: Map(socketId -> {name}), hostId: string|null }
 const rooms = new Map();
 
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
-    rooms.set(roomId, { members: new Map(), lastState: null });
+    rooms.set(roomId, { members: new Map(), hostId: null });
   }
   return rooms.get(roomId);
 }
@@ -33,7 +33,6 @@ io.on('connection', (socket) => {
     const room = getRoom(roomId);
     room.members.set(socket.id, { name: displayName });
 
-    // tell the new person who else is here (so they can start WebRTC calls)
     const others = [...room.members.entries()]
       .filter(([id]) => id !== socket.id)
       .map(([id, info]) => ({ id, name: info.name }));
@@ -41,10 +40,9 @@ io.on('connection', (socket) => {
       roomId,
       selfId: socket.id,
       members: others,
-      lastState: room.lastState
+      hostId: room.hostId
     });
 
-    // tell everyone else someone joined
     socket.to(roomId).emit('peer-joined', { id: socket.id, name: displayName });
 
     io.to(roomId).emit('roster', {
@@ -52,15 +50,14 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Playback sync: play, pause, seek, rate-change
-  socket.on('sync-event', (payload) => {
+  socket.on('become-host', () => {
     if (!currentRoom) return;
     const room = getRoom(currentRoom);
-    room.lastState = { ...payload, ts: Date.now() };
-    socket.to(currentRoom).emit('sync-event', room.lastState);
+    if (room.hostId && room.hostId !== socket.id) return;
+    room.hostId = socket.id;
+    io.to(currentRoom).emit('host-info', { hostId: socket.id, hostName: displayName });
   });
 
-  // Chat
   socket.on('chat-message', (msg) => {
     if (!currentRoom) return;
     io.to(currentRoom).emit('chat-message', {
@@ -71,7 +68,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // WebRTC signaling relay (voice/video call between peers)
   socket.on('rtc-signal', ({ to, data }) => {
     io.to(to).emit('rtc-signal', { from: socket.id, data });
   });
@@ -82,6 +78,10 @@ io.on('connection', (socket) => {
     if (room) {
       room.members.delete(socket.id);
       socket.to(currentRoom).emit('peer-left', { id: socket.id });
+      if (room.hostId === socket.id) {
+        room.hostId = null;
+        io.to(currentRoom).emit('host-info', { hostId: null, hostName: null });
+      }
       io.to(currentRoom).emit('roster', {
         members: [...room.members.entries()].map(([id, info]) => ({ id, name: info.name }))
       });
