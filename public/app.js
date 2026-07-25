@@ -12,6 +12,8 @@
   const micBtn = $('micBtn'), camBtn = $('camBtn'), localTileWrap = $('localTileWrap'), remoteTiles = $('remoteTiles');
   const chatLog = $('chatLog'), chatForm = $('chatForm'), chatInput = $('chatInput');
   const controls = $('controls');
+  const subInput = $('subInput'), subtitleOverlay = $('subtitleOverlay');
+  const avControls = $('avControls'), ccToggleBtn = $('ccToggleBtn'), volSlider = $('volSlider');
   const stageEmptyTitle = stageEmpty.querySelector('h2');
   const stageEmptyLede = stageEmpty.querySelector('.lede');
   const fileBtnLabel = stageEmpty.querySelector('.file-btn');
@@ -122,6 +124,11 @@
 
     socket.on('host-info', ({ hostId: newHostId, hostName }) => setHost(newHostId, hostName));
 
+    socket.on('subtitle-cue', ({ text }) => {
+      if (selfId && hostId === selfId) return; // the host already drives its own overlay locally
+      showSubtitle(text);
+    });
+
     socket.on('chat-message', ({ name, text, ts, id }) => {
       addChatLine(name, text, ts, id === selfId);
     });
@@ -156,12 +163,16 @@
       stageEmptyLede.textContent = "Pick a file from your computer. You'll stream it live to everyone else in the room — they don't need the file.";
       fileBtnLabel.style.display = 'inline-block';
       controls.classList.add('hidden');
+      avControls.classList.add('hidden');
       player.removeAttribute('src');
+      resetSubtitles();
     } else if (iAmHost) {
       controls.classList.remove('hidden');
+      avControls.classList.remove('hidden');
     } else {
       fileBtnLabel.style.display = 'none';
       controls.classList.add('hidden');
+      avControls.classList.remove('hidden');
       if (!player.srcObject) {
         stageEmpty.classList.remove('hidden');
         stageEmptyTitle.textContent = `${hostName || 'A friend'} is hosting`;
@@ -173,6 +184,7 @@
   // ---------- host: load + broadcast the movie ----------
   let audioCtx = null;
   let mediaElSource = null; // tied to the <video> element, created once and reused across files
+  let hostGainNode = null;  // lets the host boost their own local monitor volume independently
 
   function buildMovieStream() {
     let raw;
@@ -182,7 +194,7 @@
       raw = null;
     }
     if (!raw) {
-      note('Your browser blocked capturing the video stream. Try Chrome, Edge, or Firefox.', 'err');
+      systemMsg('Your browser blocked capturing the video stream. Try Chrome, Edge, or Firefox.');
       return null;
     }
 
@@ -201,8 +213,13 @@
       if (audioCtx.state === 'suspended') audioCtx.resume();
       if (!mediaElSource) mediaElSource = audioCtx.createMediaElementSource(player);
       const dest = audioCtx.createMediaStreamDestination();
-      mediaElSource.connect(dest);
-      mediaElSource.connect(audioCtx.destination); // host still hears the movie locally
+      if (!hostGainNode) {
+        hostGainNode = audioCtx.createGain();
+        hostGainNode.gain.value = (parseInt(volSlider.value, 10) || 130) / 100;
+        hostGainNode.connect(audioCtx.destination);
+      }
+      mediaElSource.connect(dest);          // sent to everyone else, at normal (un-boosted) level
+      mediaElSource.connect(hostGainNode);  // host's own local monitor, with their volume slider applied
       dest.stream.getAudioTracks().forEach((t) => ms.addTrack(t));
     } catch (e) {
       // Fallback: whatever audio track captureStream() itself managed to attach
@@ -210,7 +227,7 @@
     }
 
     if (ms.getAudioTracks().length === 0) {
-      note("Couldn't attach the movie's audio — everyone will see picture but no sound. Make sure the file actually has an audio track, and host from Chrome, Edge, or Firefox.", 'err');
+      systemMsg("Couldn't attach the movie's audio — everyone will see picture but no sound. Make sure the file actually has an audio track, and host from Chrome, Edge, or Firefox.");
     }
     return ms;
   }
@@ -258,6 +275,7 @@
   player.addEventListener('timeupdate', () => {
     seekBar.value = player.duration ? (player.currentTime / player.duration) * 100 : 0;
     timeLabel.textContent = `${fmt(player.currentTime)} / ${fmt(player.duration)}`;
+    if (selfId && hostId === selfId) updateSubtitleForTime(player.currentTime);
   });
   seekBar.addEventListener('input', () => {
     if (!player.duration) return;
@@ -373,7 +391,7 @@
         }
       });
     } catch (e) {
-      note("Couldn't access your mic/camera — check your browser's permission prompt, or the call will run without them.", 'err');
+      systemMsg("Couldn't access your mic/camera — check your browser's permission prompt, or the call will run without them.");
       throw e;
     }
     const tile = document.createElement('div');
@@ -494,40 +512,192 @@
 
     pc.ontrack = (e) => {
       stageEmpty.classList.add('hidden');
+      // The <video> element only ever carries picture for a viewer. Real audio
+      // is routed through a Web Audio graph we build ourselves below — that's
+      // what lets us (a) survive mobile autoplay-with-sound restrictions
+      // cleanly, (b) boost volume past the file's native level for quiet rips,
+      // and (c) keep working correctly once earbuds/Bluetooth are connected,
+      // since Web Audio's destination follows the OS's chosen output device
+      // exactly the same way a native audio/video tag would.
       player.srcObject = e.streams[0];
-      player.muted = false;
-      player.volume = 1;
-      attemptPlayWithSound();
+      player.muted = true;
+      player.play().catch(() => {});
+      setupViewerAudio(e.streams[0]);
       syncLabel.textContent = 'live from host';
     };
 
     return pc;
   }
 
-  // ---------- audio autoplay fix ----------
-  // Browsers (especially on mobile) block auto-playing video WITH SOUND unless
-  // the user just interacted with the page. Since the stream arrives async over
-  // WebRTC, that interaction has usually "expired" by the time it shows up — so
-  // play() used to silently fail and the movie would play muted with no warning.
-  // We detect that and show a one-tap "turn on sound" button instead.
-  function attemptPlayWithSound() {
-    const p = player.play();
-    if (p && typeof p.catch === 'function') {
-      p.then(() => soundGate.classList.add('hidden'))
-        .catch(() => {
-          // Autoplay-with-sound was blocked. Fall back to muted autoplay so the
-          // picture still shows up immediately, and prompt for one tap to unmute.
-          player.muted = true;
-          player.play().catch(() => {});
-          soundGate.classList.remove('hidden');
-        });
+  // ---------- viewer audio: separate, boostable, gesture-gated pipeline ----------
+  let viewerAudioCtx = null;
+  let viewerGainNode = null;
+
+  function setupViewerAudio(stream) {
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length === 0) {
+      systemMsg("No audio track arrived from the host's stream — they may need to reload and re-share.");
+      return;
     }
+    try {
+      if (!viewerAudioCtx) viewerAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (!viewerGainNode) {
+        viewerGainNode = viewerAudioCtx.createGain();
+        viewerGainNode.gain.value = (parseInt(volSlider.value, 10) || 130) / 100;
+        viewerGainNode.connect(viewerAudioCtx.destination);
+      }
+      const src = viewerAudioCtx.createMediaStreamSource(new MediaStream(audioTracks));
+      src.connect(viewerGainNode);
+    } catch (e) {
+      // Last-resort fallback: let the <video> element's own audio track play.
+      player.muted = false;
+      player.volume = 1;
+      return;
+    }
+    tryResumeViewerAudio();
+  }
+
+  // Browsers (especially on mobile) block audio from playing until the user
+  // has directly interacted with the page. Since the stream arrives async
+  // over WebRTC, that interaction window has usually "expired" by the time it
+  // shows up — so we detect that and show a one-tap "turn on sound" button
+  // that STAYS ON SCREEN until it's actually tapped, instead of silently
+  // failing and leaving the room muted with no explanation.
+  function tryResumeViewerAudio() {
+    if (!viewerAudioCtx) return;
+    if (viewerAudioCtx.state === 'running') {
+      soundGate.classList.add('hidden');
+      return;
+    }
+    viewerAudioCtx.resume()
+      .then(() => soundGate.classList.add('hidden'))
+      .catch(() => soundGate.classList.remove('hidden'));
+    // Some browsers resolve resume() optimistically before audio is really
+    // flowing; double-check shortly after and keep the button up if it's not.
+    setTimeout(() => {
+      if (viewerAudioCtx.state === 'running') soundGate.classList.add('hidden');
+      else soundGate.classList.remove('hidden');
+    }, 300);
   }
 
   soundGate.addEventListener('click', () => {
-    player.muted = false;
-    player.volume = 1;
-    player.play().catch(() => {});
-    soundGate.classList.add('hidden');
+    if (viewerAudioCtx) {
+      viewerAudioCtx.resume().then(() => soundGate.classList.add('hidden')).catch(() => {});
+    } else if (audioCtx) {
+      // Rare case: this is the host's own gate (host audio normally starts
+      // via the file-picker click already, but cover it just in case).
+      audioCtx.resume().catch(() => {});
+      soundGate.classList.add('hidden');
+    } else {
+      soundGate.classList.add('hidden');
+    }
+  });
+
+  volSlider.addEventListener('input', () => {
+    const gain = (parseInt(volSlider.value, 10) || 100) / 100;
+    if (viewerGainNode) viewerGainNode.gain.value = gain;
+    if (hostGainNode) hostGainNode.gain.value = gain;
+  });
+
+  // ---------- subtitles ----------
+  let subtitleCues = [];      // [{ start, end, text }] in seconds, sorted by start
+  let activeCueIndex = -1;
+  let lastSentSubText = null;
+  let subtitlesOn = true;
+
+  function resetSubtitles() {
+    subtitleCues = [];
+    activeCueIndex = -1;
+    lastSentSubText = null;
+    subtitleOverlay.classList.add('hidden');
+    subtitleOverlay.textContent = '';
+  }
+
+  function toSeconds(h, m, s, ms) {
+    return (h ? parseInt(h, 10) : 0) * 3600 + parseInt(m, 10) * 60 + parseInt(s, 10) + parseInt(ms, 10) / 1000;
+  }
+
+  // Parses both .srt (00:00:20,000 --> 00:00:24,400) and .vtt
+  // (00:00:20.000 --> 00:00:24.400, optional WEBVTT header) formats.
+  function parseSubtitles(raw) {
+    const clean = raw.replace(/\r/g, '').replace(/^\uFEFF/, '');
+    const body = clean.replace(/^WEBVTT[^\n]*\n/, '');
+    const blocks = body.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
+    const timeRe = /(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})/;
+    const cues = [];
+    for (const block of blocks) {
+      const lines = block.split('\n');
+      let idx = 0;
+      if (!timeRe.test(lines[0]) && lines[1] && timeRe.test(lines[1])) idx = 1;
+      const m = lines[idx] && lines[idx].match(timeRe);
+      if (!m) continue;
+      const start = toSeconds(m[1], m[2], m[3], m[4]);
+      const end = toSeconds(m[5], m[6], m[7], m[8]);
+      const text = lines.slice(idx + 1).join('\n').replace(/<[^>]+>/g, '').trim();
+      if (text) cues.push({ start, end, text });
+    }
+    cues.sort((a, b) => a.start - b.start);
+    return cues;
+  }
+
+  subInput.addEventListener('change', async () => {
+    const file = subInput.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const cues = parseSubtitles(text);
+      if (cues.length === 0) {
+        systemMsg('Could not find any subtitle lines in that file — check it is a valid .srt or .vtt.');
+        return;
+      }
+      subtitleCues = cues;
+      activeCueIndex = -1;
+      lastSentSubText = null;
+      subtitlesOn = true;
+      ccToggleBtn.classList.add('active');
+      systemMsg(`Loaded ${cues.length} subtitle lines — they'll appear for everyone in sync with playback.`);
+    } catch (e) {
+      systemMsg('Could not read that subtitle file.');
+    }
+  });
+
+  function updateSubtitleForTime(t) {
+    if (!subtitleCues.length) return;
+    if (activeCueIndex >= 0) {
+      const cur = subtitleCues[activeCueIndex];
+      if (t >= cur.start && t < cur.end) return; // still the same line, nothing to do
+    }
+    let found = -1;
+    for (let i = 0; i < subtitleCues.length; i++) {
+      if (t >= subtitleCues[i].start && t < subtitleCues[i].end) { found = i; break; }
+      if (subtitleCues[i].start > t) break; // sorted — no later cue can match either
+    }
+    if (found === activeCueIndex) return;
+    activeCueIndex = found;
+    const text = found >= 0 ? subtitleCues[found].text : '';
+    showSubtitle(text);
+    if (text !== lastSentSubText) {
+      lastSentSubText = text;
+      socket?.emit('subtitle-cue', { text });
+    }
+  }
+
+  function showSubtitle(text) {
+    if (!subtitlesOn || !text) {
+      subtitleOverlay.classList.add('hidden');
+      subtitleOverlay.textContent = '';
+      return;
+    }
+    subtitleOverlay.textContent = text;
+    subtitleOverlay.classList.remove('hidden');
+  }
+
+  ccToggleBtn.addEventListener('click', () => {
+    subtitlesOn = !subtitlesOn;
+    ccToggleBtn.classList.toggle('active', subtitlesOn);
+    if (!subtitlesOn) {
+      subtitleOverlay.classList.add('hidden');
+      subtitleOverlay.textContent = '';
+    }
   });
 })();
