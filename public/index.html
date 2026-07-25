@@ -67,7 +67,12 @@
   <main class="room-main">
     <div class="stage">
       <div class="stage-inner" id="stageInner">
-        <video id="player" playsinline></video>
+        <video id="player" playsinline webkit-playsinline></video>
+        <button id="soundGate" class="sound-gate hidden" type="button">
+          <span class="sound-gate-icon">🔊</span>
+          <span>Tap to turn on sound</span>
+        </button>
+        <button id="fsBtn" class="fs-float" type="button" title="Fullscreen">⛶</button>
         <div class="stage-empty" id="stageEmpty">
           <p class="eyebrow">02 — Load the film</p>
           <h2>Choose the movie to host</h2>
@@ -91,7 +96,6 @@
           <option value="1.5">1.5×</option>
           <option value="2">2×</option>
         </select>
-        <button id="fsBtn" class="ctrl-btn" title="Fullscreen">⛶</button>
       </div>
     </div>
 
