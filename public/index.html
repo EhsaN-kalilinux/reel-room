@@ -19,9 +19,9 @@
   </header>
 
   <div class="gate-card">
-    <p class="eyebrow">01 — Your copy of the film stays on your machine</p>
-    <h1>Press play together.<br>Nothing streams but the sync.</h1>
-    <p class="lede">Everyone loads their own local copy of the movie. Reel Room only keeps play, pause, seek and speed lined up — frame-tight, with zero buffering, because the video itself never leaves your device.</p>
+    <p class="eyebrow">01 — One host, one stream, one room</p>
+    <h1>One friend hosts the movie.<br>Everyone else just watches — and talks.</h1>
+    <p class="lede">Whoever loads the file streams it live to the rest of the room, so no one else needs the file. Voice and video call stays on the whole time, completely separate from the movie stream, so you can react together as it plays.</p>
 
     <div class="gate-actions">
       <div class="field">
@@ -58,7 +58,7 @@
     </div>
     <div class="room-bar-right">
       <span class="sync-dot" id="syncDot"></span>
-      <span id="syncLabel">synced</span>
+      <span id="syncLabel">waiting for host</span>
       <button id="copyLinkBtn" class="btn btn-tiny">Copy invite link</button>
       <button id="leaveBtn" class="btn btn-tiny btn-danger">Leave</button>
     </div>
@@ -70,8 +70,8 @@
         <video id="player" playsinline></video>
         <div class="stage-empty" id="stageEmpty">
           <p class="eyebrow">02 — Load the film</p>
-          <h2>Choose your local copy of the movie</h2>
-          <p class="lede">Pick the exact same file/rip your friends have. Playback position, pauses and speed changes will sync automatically once everyone's loaded.</p>
+          <h2>Choose the movie to host</h2>
+          <p class="lede">Pick a file from your computer. You'll stream it live to everyone else in the room — they don't need the file.</p>
           <label class="btn btn-primary file-btn">
             Choose video file
             <input type="file" id="fileInput" accept="video/*" hidden />
@@ -79,7 +79,7 @@
         </div>
       </div>
 
-      <div class="controls" id="controls">
+      <div class="controls hidden" id="controls">
         <button id="playPauseBtn" class="ctrl-btn" title="Play/Pause">▶</button>
         <input type="range" id="seekBar" min="0" max="100" value="0" step="0.01" class="seek" />
         <span class="time" id="timeLabel">00:00 / 00:00</span>
