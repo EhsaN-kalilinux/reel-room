@@ -72,6 +72,11 @@ io.on('connection', (socket) => {
     io.to(to).emit('rtc-signal', { from: socket.id, data });
   });
 
+  socket.on('subtitle-cue', ({ text }) => {
+    if (!currentRoom) return;
+    socket.to(currentRoom).emit('subtitle-cue', { text: String(text || '').slice(0, 500) });
+  });
+
   socket.on('media-state', ({ mic, cam }) => {
     if (!currentRoom) return;
     const room = rooms.get(currentRoom);
