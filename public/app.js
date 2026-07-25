@@ -171,34 +171,70 @@
   }
 
   // ---------- host: load + broadcast the movie ----------
+  let audioCtx = null;
+  let mediaElSource = null; // tied to the <video> element, created once and reused across files
+
+  function buildMovieStream() {
+    let raw;
+    try {
+      raw = player.captureStream ? player.captureStream() : (player.mozCaptureStream ? player.mozCaptureStream() : null);
+    } catch (e) {
+      raw = null;
+    }
+    if (!raw) {
+      note('Your browser blocked capturing the video stream. Try Chrome, Edge, or Firefox.', 'err');
+      return null;
+    }
+
+    const ms = new MediaStream();
+    raw.getVideoTracks().forEach((t) => ms.addTrack(t));
+
+    // Route audio through the Web Audio API instead of trusting captureStream()'s
+    // own audio track. That native track is unreliable in practice — several
+    // browsers attach it late, drop it, or omit it depending on autoplay state.
+    // A MediaStreamDestination fed by a MediaElementSourceNode is guaranteed to
+    // carry real audio data as long as the file has a soundtrack. Note this also
+    // takes over the element's audio output, so we reconnect it back to the
+    // speakers below — otherwise the host would go silent themselves.
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      if (!mediaElSource) mediaElSource = audioCtx.createMediaElementSource(player);
+      const dest = audioCtx.createMediaStreamDestination();
+      mediaElSource.connect(dest);
+      mediaElSource.connect(audioCtx.destination); // host still hears the movie locally
+      dest.stream.getAudioTracks().forEach((t) => ms.addTrack(t));
+    } catch (e) {
+      // Fallback: whatever audio track captureStream() itself managed to attach
+      raw.getAudioTracks().forEach((t) => ms.addTrack(t));
+    }
+
+    if (ms.getAudioTracks().length === 0) {
+      note("Couldn't attach the movie's audio — everyone will see picture but no sound. Make sure the file actually has an audio track, and host from Chrome, Edge, or Firefox.", 'err');
+    }
+    return ms;
+  }
+
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files[0];
     if (!file) return;
+
+    // Create/resume the AudioContext synchronously, in direct response to this
+    // click — browsers require that for audio to be allowed to actually play.
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+    } catch (e) { /* handled again inside buildMovieStream */ }
+
     player.src = URL.createObjectURL(file);
     stageEmpty.classList.add('hidden');
     player.load();
     socket.emit('become-host');
 
     player.addEventListener('loadedmetadata', () => {
-      try {
-        movieStream = player.captureStream ? player.captureStream() : player.mozCaptureStream();
-      } catch (e) {
-        note('Your browser blocked capturing the video stream. Try Chrome, Edge, or Firefox.', 'err');
-        return;
-      }
-      // Guard against silently broadcasting a video-only stream: some browsers
-      // only attach the audio track to captureStream() once playback has
-      // actually started producing samples, so nudge playback first.
-      const ensureAudioTrack = () => {
-        if (movieStream.getAudioTracks().length === 0) {
-          note("This file's audio didn't attach to the stream — everyone will see picture but no sound. Try Chrome or Edge, or re-check the file has an audio track.", 'err');
-        }
-      };
-      if (player.paused) {
-        player.play().then(ensureAudioTrack).catch(ensureAudioTrack);
-      } else {
-        ensureAudioTrack();
-      }
+      movieStream = buildMovieStream();
+      if (!movieStream) return;
+      if (player.paused) player.play().catch(() => {});
       callPeers.forEach((_pc, peerId) => startMovieBroadcastTo(peerId));
     }, { once: true });
   }, false);
