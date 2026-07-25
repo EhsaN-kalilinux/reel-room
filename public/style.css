@@ -193,3 +193,62 @@ input,select{font-family:var(--body);}
   .room-main{grid-template-columns:1fr;grid-template-rows:1fr auto;}
   .side{border-left:none;border-top:1px solid var(--line);max-height:42vh;}
 }
+
+/* ---------- sound gate: stays put, impossible to miss, until tapped ---------- */
+.sound-gate{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  z-index:20;display:flex;flex-direction:column;align-items:center;gap:.5rem;
+  padding:1.4rem 2rem;border-radius:16px;border:1px solid var(--red);
+  background:rgba(10,9,16,.88);backdrop-filter:blur(6px);
+  color:#fff;font-weight:700;font-size:1rem;letter-spacing:.02em;
+  box-shadow:0 0 0 0 var(--red-glow), 0 20px 50px rgba(0,0,0,.6);
+  animation:soundGatePulse 1.6s ease-in-out infinite;
+}
+.sound-gate:hover{border-color:#fff;}
+.sound-gate-icon{font-size:2rem;line-height:1;}
+@keyframes soundGatePulse{
+  0%,100%{box-shadow:0 0 0 0 var(--red-glow), 0 20px 50px rgba(0,0,0,.6);}
+  50%{box-shadow:0 0 0 14px rgba(225,36,65,0), 0 20px 50px rgba(0,0,0,.6);}
+}
+@media (max-width:640px){
+  .sound-gate{padding:1.1rem 1.5rem;font-size:.92rem;max-width:80vw;text-align:center;}
+  .sound-gate-icon{font-size:1.7rem;}
+}
+
+/* ---------- subtitles ---------- */
+.subtitle-overlay{
+  position:absolute;left:50%;bottom:9%;transform:translateX(-50%);
+  z-index:15;max-width:88%;text-align:center;pointer-events:none;
+  color:#fff;font-family:var(--body);font-weight:700;
+  font-size:clamp(1rem, 2.4vw, 1.5rem);line-height:1.35;
+  text-shadow:
+    0 0 6px rgba(0,0,0,.9), 0 0 3px rgba(0,0,0,.9),
+    1px 1px 2px rgba(0,0,0,.95), -1px -1px 2px rgba(0,0,0,.95);
+  white-space:pre-line;
+}
+@media (max-width:640px){
+  .subtitle-overlay{bottom:12%;font-size:clamp(.85rem, 3.6vw, 1.2rem);}
+}
+
+/* ---------- subtitle upload + AV (volume/CC) controls ---------- */
+.sub-btn{
+  display:flex;align-items:center;justify-content:center;
+  padding:0 .8rem;height:36px;font-size:.8rem;font-weight:700;letter-spacing:.02em;
+}
+.av-controls{
+  display:flex;align-items:center;gap:.9rem;padding:.6rem 1.2rem;
+  background:var(--bg-2);border-top:1px solid var(--line);flex-shrink:0;
+}
+.vol-wrap{display:flex;align-items:center;gap:.5rem;flex:1;max-width:220px;}
+.vol-icon{font-size:1rem;}
+.vol-slider{flex:1;accent-color:var(--red);}
+#ccToggleBtn{width:auto;padding:0 .7rem;font-size:.72rem;font-weight:700;letter-spacing:.04em;}
+
+/* ---------- fullscreen button (was completely unstyled before) ---------- */
+.fs-float{
+  position:absolute;top:.8rem;right:.8rem;z-index:18;
+  width:38px;height:38px;border-radius:8px;border:1px solid var(--line);
+  background:rgba(10,9,16,.7);color:#fff;font-size:1.1rem;
+  display:flex;align-items:center;justify-content:center;
+}
+.fs-float:hover{border-color:var(--red);}
