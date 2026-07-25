@@ -11,13 +11,19 @@
   const playPauseBtn = $('playPauseBtn'), seekBar = $('seekBar'), timeLabel = $('timeLabel'), speedSelect = $('speedSelect'), fsBtn = $('fsBtn');
   const micBtn = $('micBtn'), camBtn = $('camBtn'), localTileWrap = $('localTileWrap'), remoteTiles = $('remoteTiles');
   const chatLog = $('chatLog'), chatForm = $('chatForm'), chatInput = $('chatInput');
+  const controls = $('controls');
+  const stageEmptyTitle = stageEmpty.querySelector('h2');
+  const stageEmptyLede = stageEmpty.querySelector('.lede');
+  const fileBtnLabel = stageEmpty.querySelector('.file-btn');
 
   let socket = null;
   let roomId = null, selfId = null, myName = 'Guest';
-  let applyingRemoteState = false; // guard to avoid feedback loops
-  let localStream = null;
-  const peers = new Map(); // peerId -> RTCPeerConnection
-  const remoteVideoEls = new Map();
+  let localStream = null;      // mic/cam for the call
+  let movieStream = null;      // captured from OUR video element, only exists if we are host
+  let hostId = null;
+  const callPeers = new Map();   // peerId -> RTCPeerConnection (voice/video call, always active)
+  const moviePeers = new Map();  // peerId -> RTCPeerConnection (movie stream, host -> each viewer)
+  const remoteCallEls = new Map();
 
   const fmt = (s) => {
     if (!isFinite(s)) return '00:00';
@@ -35,10 +41,7 @@
   }
 
   // ---------- gate actions ----------
-  createRoomBtn.addEventListener('click', () => {
-    const code = genRoomCode();
-    enterRoom(code);
-  });
+  createRoomBtn.addEventListener('click', () => enterRoom(genRoomCode()));
 
   joinRoomBtn.addEventListener('click', () => {
     let raw = joinCodeInput.value.trim();
@@ -52,7 +55,6 @@
     enterRoom(raw.toUpperCase());
   });
 
-  // auto-join if URL has ?room=
   const urlRoom = new URLSearchParams(location.search).get('room');
   if (urlRoom) joinCodeInput.value = urlRoom;
 
@@ -83,44 +85,47 @@
 
   // ---------- socket wiring ----------
   function wireSocket() {
-    socket.on('room-joined', ({ selfId: id, members, lastState }) => {
+    socket.on('room-joined', ({ selfId: id, members, hostId: currentHost }) => {
       selfId = id;
       systemMsg(`You joined as ${myName}.`);
       members.forEach((m) => callPeer(m.id, m.name));
-      if (lastState) applyRemoteState(lastState);
+      setHost(currentHost, null);
     });
 
     socket.on('peer-joined', ({ id, name }) => {
       systemMsg(`${name} joined the room.`);
+      if (selfId && hostId === selfId && movieStream) startMovieBroadcastTo(id);
     });
 
     socket.on('peer-left', ({ id }) => {
-      const pc = peers.get(id);
-      if (pc) { pc.close(); peers.delete(id); }
-      const el = remoteVideoEls.get(id);
-      if (el) { el.parentElement.remove(); remoteVideoEls.delete(id); }
+      const cpc = callPeers.get(id);
+      if (cpc) { cpc.close(); callPeers.delete(id); }
+      const mpc = moviePeers.get(id);
+      if (mpc) { mpc.close(); moviePeers.delete(id); }
+      const el = remoteCallEls.get(id);
+      if (el) { el.parentElement.remove(); remoteCallEls.delete(id); }
     });
 
-    socket.on('roster', ({ members }) => {
-      // no-op display hook; tiles are managed via peer-joined/left + rtc
-    });
+    socket.on('roster', () => {});
 
-    socket.on('sync-event', (state) => applyRemoteState(state));
+    socket.on('host-info', ({ hostId: newHostId, hostName }) => setHost(newHostId, hostName));
 
     socket.on('chat-message', ({ name, text, ts, id }) => {
       addChatLine(name, text, ts, id === selfId);
     });
 
     socket.on('rtc-signal', async ({ from, data }) => {
-      let pc = peers.get(from);
-      if (!pc) pc = createPeerConnection(from, 'peer');
+      const kind = data.kind || 'call';
+      const map = kind === 'movie' ? moviePeers : callPeers;
+      let pc = map.get(from);
+      if (!pc) pc = kind === 'movie' ? createMoviePeerConnection(from) : createCallPeerConnection(from, 'peer');
 
       if (data.sdp) {
         await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
         if (data.sdp.type === 'offer') {
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          socket.emit('rtc-signal', { to: from, data: { sdp: pc.localDescription } });
+          socket.emit('rtc-signal', { to: from, data: { sdp: pc.localDescription, kind } });
         }
       } else if (data.candidate) {
         try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch (e) {}
@@ -128,72 +133,83 @@
     });
   }
 
-  // ---------- video file + local controls ----------
-  fileInput.addEventListener('change', () => {
+  // ---------- host / viewer state ----------
+  function setHost(newHostId, hostName) {
+    hostId = newHostId;
+    const iAmHost = selfId && hostId === selfId;
+
+    if (!hostId) {
+      stageEmpty.classList.remove('hidden');
+      stageEmptyTitle.textContent = 'Choose the movie to host';
+      stageEmptyLede.textContent = "Pick a file from your computer. You'll stream it live to everyone else in the room — they don't need the file.";
+      fileBtnLabel.style.display = 'inline-block';
+      controls.classList.add('hidden');
+      player.removeAttribute('src');
+    } else if (iAmHost) {
+      controls.classList.remove('hidden');
+    } else {
+      fileBtnLabel.style.display = 'none';
+      controls.classList.add('hidden');
+      if (!player.srcObject) {
+        stageEmpty.classList.remove('hidden');
+        stageEmptyTitle.textContent = `${hostName || 'A friend'} is hosting`;
+        stageEmptyLede.textContent = 'Waiting for their stream to connect…';
+      }
+    }
+  }
+
+  // ---------- host: load + broadcast the movie ----------
+  fileInput.addEventListener('change', async () => {
     const file = fileInput.files[0];
     if (!file) return;
     player.src = URL.createObjectURL(file);
     stageEmpty.classList.add('hidden');
     player.load();
-  });
+    socket.emit('become-host');
 
-  player.addEventListener('play', () => broadcast('play'));
-  player.addEventListener('pause', () => broadcast('pause'));
-  player.addEventListener('seeked', () => broadcast('seek'));
-  player.addEventListener('ratechange', () => broadcast('rate'));
-  player.addEventListener('timeupdate', () => {
-    seekBar.value = player.duration ? (player.currentTime / player.duration) * 100 : 0;
-    timeLabel.textContent = `${fmt(player.currentTime)} / ${fmt(player.duration)}`;
-  });
+    player.addEventListener('loadedmetadata', () => {
+      try {
+        movieStream = player.captureStream ? player.captureStream() : player.mozCaptureStream();
+      } catch (e) {
+        note('Your browser blocked capturing the video stream. Try Chrome or Firefox.', 'err');
+        return;
+      }
+      callPeers.forEach((_pc, peerId) => startMovieBroadcastTo(peerId));
+    }, { once: true });
+  }, false);
+
+  function startMovieBroadcastTo(peerId) {
+    if (!movieStream) return;
+    const pc = createMoviePeerConnection(peerId);
+    movieStream.getTracks().forEach((t) => pc.addTrack(t, movieStream));
+    (async () => {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit('rtc-signal', { to: peerId, data: { sdp: pc.localDescription, kind: 'movie' } });
+    })();
+  }
 
   playPauseBtn.addEventListener('click', () => {
     if (player.paused) player.play(); else player.pause();
   });
   player.addEventListener('play', () => (playPauseBtn.textContent = '⏸'));
   player.addEventListener('pause', () => (playPauseBtn.textContent = '▶'));
-
+  player.addEventListener('timeupdate', () => {
+    seekBar.value = player.duration ? (player.currentTime / player.duration) * 100 : 0;
+    timeLabel.textContent = `${fmt(player.currentTime)} / ${fmt(player.duration)}`;
+  });
   seekBar.addEventListener('input', () => {
     if (!player.duration) return;
     player.currentTime = (seekBar.value / 100) * player.duration;
   });
-
   speedSelect.addEventListener('change', () => {
     player.playbackRate = parseFloat(speedSelect.value);
   });
-
   fsBtn.addEventListener('click', () => {
     const stage = document.getElementById('stageInner');
     if (document.fullscreenElement) document.exitFullscreen();
     else stage.requestFullscreen?.();
   });
-
-  function broadcast(action) {
-    if (applyingRemoteState || !socket) return;
-    socket.emit('sync-event', {
-      action,
-      time: player.currentTime,
-      speed: player.playbackRate
-    });
-    flashSync(true);
-  }
-
-  function applyRemoteState(state) {
-    if (!state) return;
-    applyingRemoteState = true;
-    const elapsed = (Date.now() - (state.ts || Date.now())) / 1000;
-    const target = state.time + (state.action === 'play' ? elapsed * (state.speed || 1) : 0);
-    if (Math.abs(player.currentTime - target) > 0.35) player.currentTime = Math.max(0, target);
-    if (state.speed) { player.playbackRate = state.speed; speedSelect.value = state.speed; }
-    if (state.action === 'play') player.play().catch(() => {});
-    if (state.action === 'pause') player.pause();
-    flashSync(false);
-    setTimeout(() => (applyingRemoteState = false), 150);
-  }
-
-  function flashSync() {
-    syncDot.classList.remove('off');
-    syncLabel.textContent = 'synced';
-  }
 
   // ---------- chat ----------
   chatForm.addEventListener('submit', (e) => {
@@ -223,7 +239,7 @@
     return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  // ---------- WebRTC calls ----------
+  // ---------- WebRTC: voice/video call (always on, separate from movie) ----------
   const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 
   async function ensureLocalStream() {
@@ -251,16 +267,16 @@
     if (track) { track.enabled = !track.enabled; camBtn.classList.toggle('active', track.enabled); }
   });
 
-  function createPeerConnection(peerId, name) {
+  function createCallPeerConnection(peerId, name) {
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    peers.set(peerId, pc);
+    callPeers.set(peerId, pc);
 
     pc.onicecandidate = (e) => {
-      if (e.candidate) socket.emit('rtc-signal', { to: peerId, data: { candidate: e.candidate } });
+      if (e.candidate) socket.emit('rtc-signal', { to: peerId, data: { candidate: e.candidate, kind: 'call' } });
     };
 
     pc.ontrack = (e) => {
-      let tile = remoteVideoEls.get(peerId);
+      let tile = remoteCallEls.get(peerId);
       if (!tile) {
         tile = document.createElement('video');
         tile.autoplay = true; tile.playsInline = true;
@@ -270,21 +286,41 @@
         const label = document.createElement('span'); label.className = 'tile-name'; label.textContent = name || 'Friend';
         wrap.appendChild(label);
         remoteTiles.appendChild(wrap);
-        remoteVideoEls.set(peerId, tile);
+        remoteCallEls.set(peerId, tile);
       }
       tile.srcObject = e.streams[0];
     };
 
     if (localStream) localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
-
     return pc;
   }
 
   async function callPeer(peerId, name) {
     await ensureLocalStream().catch(() => {});
-    const pc = createPeerConnection(peerId, name);
+    const pc = createCallPeerConnection(peerId, name);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    socket.emit('rtc-signal', { to: peerId, data: { sdp: pc.localDescription } });
+    socket.emit('rtc-signal', { to: peerId, data: { sdp: pc.localDescription, kind: 'call' } });
+  }
+
+  // ---------- WebRTC: movie stream (host -> each viewer) ----------
+  function createMoviePeerConnection(peerId) {
+    let pc = moviePeers.get(peerId);
+    if (pc) return pc;
+    pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    moviePeers.set(peerId, pc);
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) socket.emit('rtc-signal', { to: peerId, data: { candidate: e.candidate, kind: 'movie' } });
+    };
+
+    pc.ontrack = (e) => {
+      stageEmpty.classList.add('hidden');
+      player.srcObject = e.streams[0];
+      player.play().catch(() => {});
+      syncLabel.textContent = 'live from host';
+    };
+
+    return pc;
   }
 })();
