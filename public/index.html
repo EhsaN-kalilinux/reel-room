@@ -72,6 +72,7 @@
           <span class="sound-gate-icon">🔊</span>
           <span>Tap to turn on sound</span>
         </button>
+        <div id="subtitleOverlay" class="subtitle-overlay hidden"></div>
         <button id="fsBtn" class="fs-float" type="button" title="Fullscreen">⛶</button>
         <div class="stage-empty" id="stageEmpty">
           <p class="eyebrow">02 — Load the film</p>
@@ -96,6 +97,18 @@
           <option value="1.5">1.5×</option>
           <option value="2">2×</option>
         </select>
+        <label class="ctrl-btn sub-btn" title="Add subtitles (.srt or .vtt)">
+          CC+
+          <input type="file" id="subInput" accept=".srt,.vtt,text/vtt,application/x-subrip" hidden />
+        </label>
+      </div>
+
+      <div class="av-controls hidden" id="avControls">
+        <button id="ccToggleBtn" class="icon-btn active" type="button" title="Toggle subtitles">CC</button>
+        <span class="vol-wrap" title="Volume boost">
+          <span class="vol-icon">🔊</span>
+          <input type="range" id="volSlider" min="0" max="200" value="130" class="vol-slider" />
+        </span>
       </div>
     </div>
 
