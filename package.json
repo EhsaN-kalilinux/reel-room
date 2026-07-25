@@ -1,0 +1,16 @@
+{
+  "name": "reel-room",
+  "version": "1.0.0",
+  "description": "Reel Room - private watch party with synced local playback and P2P voice/video calls",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

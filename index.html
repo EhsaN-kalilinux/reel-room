@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Reel Room — watch together, in sync</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ============ GATE / LANDING ============ -->
+<section id="gate" class="gate">
+  <div class="gate-glow"></div>
+  <header class="brand">
+    <span class="brand-mark">◈</span>
+    <span class="brand-word">REEL ROOM</span>
+  </header>
+
+  <div class="gate-card">
+    <p class="eyebrow">01 — Your copy of the film stays on your machine</p>
+    <h1>Press play together.<br>Nothing streams but the sync.</h1>
+    <p class="lede">Everyone loads their own local copy of the movie. Reel Room only keeps play, pause, seek and speed lined up — frame-tight, with zero buffering, because the video itself never leaves your device.</p>
+
+    <div class="gate-actions">
+      <div class="field">
+        <label for="nameInput">Your name</label>
+        <input id="nameInput" type="text" placeholder="e.g. Sam" maxlength="24" />
+      </div>
+
+      <div class="gate-split">
+        <div class="gate-option">
+          <h3>Start a room</h3>
+          <p>Create a private room and get a link to send your friends.</p>
+          <button id="createRoomBtn" class="btn btn-primary">Create room</button>
+        </div>
+        <div class="divider"><span>or</span></div>
+        <div class="gate-option">
+          <h3>Join a room</h3>
+          <p>Paste the room link or code a friend sent you.</p>
+          <input id="joinCodeInput" type="text" placeholder="Room code or link" />
+          <button id="joinRoomBtn" class="btn btn-ghost">Join room</button>
+        </div>
+      </div>
+    </div>
+    <p class="gate-note" id="gateNote"></p>
+  </div>
+</section>
+
+<!-- ============ ROOM ============ -->
+<section id="room" class="room hidden">
+  <header class="room-bar">
+    <div class="room-bar-left">
+      <span class="brand-mark small">◈</span>
+      <span class="room-name">REEL ROOM</span>
+      <span class="room-id-pill" id="roomIdPill" title="Click to copy invite link">room · <b id="roomIdText">------</b></span>
+    </div>
+    <div class="room-bar-right">
+      <span class="sync-dot" id="syncDot"></span>
+      <span id="syncLabel">synced</span>
+      <button id="copyLinkBtn" class="btn btn-tiny">Copy invite link</button>
+      <button id="leaveBtn" class="btn btn-tiny btn-danger">Leave</button>
+    </div>
+  </header>
+
+  <main class="room-main">
+    <div class="stage">
+      <div class="stage-inner" id="stageInner">
+        <video id="player" playsinline></video>
+        <div class="stage-empty" id="stageEmpty">
+          <p class="eyebrow">02 — Load the film</p>
+          <h2>Choose your local copy of the movie</h2>
+          <p class="lede">Pick the exact same file/rip your friends have. Playback position, pauses and speed changes will sync automatically once everyone's loaded.</p>
+          <label class="btn btn-primary file-btn">
+            Choose video file
+            <input type="file" id="fileInput" accept="video/*" hidden />
+          </label>
+        </div>
+      </div>
+
+      <div class="controls" id="controls">
+        <button id="playPauseBtn" class="ctrl-btn" title="Play/Pause">▶</button>
+        <input type="range" id="seekBar" min="0" max="100" value="0" step="0.01" class="seek" />
+        <span class="time" id="timeLabel">00:00 / 00:00</span>
+        <select id="speedSelect" class="speed">
+          <option value="0.5">0.5×</option>
+          <option value="0.75">0.75×</option>
+          <option value="1" selected>1×</option>
+          <option value="1.25">1.25×</option>
+          <option value="1.5">1.5×</option>
+          <option value="2">2×</option>
+        </select>
+        <button id="fsBtn" class="ctrl-btn" title="Fullscreen">⛶</button>
+      </div>
+    </div>
+
+    <aside class="side">
+      <div class="panel call-panel">
+        <div class="panel-head">
+          <h4>In the room</h4>
+          <div class="call-toggles">
+            <button id="micBtn" class="icon-btn active" title="Toggle microphone">🎙</button>
+            <button id="camBtn" class="icon-btn" title="Toggle camera">📷</button>
+          </div>
+        </div>
+        <div id="localTileWrap" class="tiles"></div>
+        <div id="remoteTiles" class="tiles"></div>
+      </div>
+
+      <div class="panel chat-panel">
+        <div class="panel-head"><h4>Chat</h4></div>
+        <div id="chatLog" class="chat-log"></div>
+        <form id="chatForm" class="chat-form">
+          <input id="chatInput" type="text" placeholder="Message the room…" maxlength="500" autocomplete="off" />
+          <button class="btn btn-tiny" type="submit">Send</button>
+        </form>
+      </div>
+    </aside>
+  </main>
+</section>
+
+<audio id="dingSound" hidden></audio>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
