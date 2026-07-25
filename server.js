@@ -31,11 +31,11 @@ io.on('connection', (socket) => {
     socket.join(roomId);
 
     const room = getRoom(roomId);
-    room.members.set(socket.id, { name: displayName });
+    room.members.set(socket.id, { name: displayName, mic: true, cam: true });
 
     const others = [...room.members.entries()]
       .filter(([id]) => id !== socket.id)
-      .map(([id, info]) => ({ id, name: info.name }));
+      .map(([id, info]) => ({ id, name: info.name, mic: info.mic, cam: info.cam }));
     socket.emit('room-joined', {
       roomId,
       selfId: socket.id,
@@ -70,6 +70,17 @@ io.on('connection', (socket) => {
 
   socket.on('rtc-signal', ({ to, data }) => {
     io.to(to).emit('rtc-signal', { from: socket.id, data });
+  });
+
+  socket.on('media-state', ({ mic, cam }) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (room && room.members.has(socket.id)) {
+      const info = room.members.get(socket.id);
+      info.mic = !!mic;
+      info.cam = !!cam;
+    }
+    socket.to(currentRoom).emit('media-state', { id: socket.id, mic: !!mic, cam: !!cam });
   });
 
   socket.on('disconnect', () => {
